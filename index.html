@@ -750,6 +750,14 @@ function search(query, lang){
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
 
+  // Whole-word matches beat matches buried inside another word
+  // (searching "test" ranks "test" above "protest"), and every
+  // title match outranks any description-only match.
+  const rankers = terms.map(t => {
+    const safe = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return { t, word: new RegExp('(^|[^a-z0-9])' + safe + '($|[^a-z0-9])') };
+  });
+
   const out = [];
   for (const site of state.sites){
     // Filter out sites that don't match the selected language
@@ -759,25 +767,29 @@ function search(query, lang){
     const desc  = (site.description || '').toLowerCase();
     const dom   = (site.domain || '').toLowerCase();
     const tag   = (site.tag || '').toLowerCase();
-    const hay   = `${title} ${desc} ${dom} ${tag}`;
 
     let score = 0, allMatch = true;
-    for (const t of terms){
-      if (!hay.includes(t)){ allMatch = false; break; }
-      if (title.includes(t)) score += 10;
-      if (dom.includes(t))   score += 6;
-      if (tag.includes(t))   score += 4;
-      if (desc.includes(t))  score += 3;
-      if (title.startsWith(t)) score += 5;
+    for (const r of rankers){
+      const { t, word } = r;
+      if (!title.includes(t) && !desc.includes(t) && !dom.includes(t) && !tag.includes(t)){
+        allMatch = false; break;
+      }
+      if (word.test(title))      score += 100; // whole word in title: best
+      else if (title.includes(t)) score += 40; // inside a word in title
+      if (title.startsWith(t))    score += 5;
+      if (word.test(desc))       score += 30;  // whole word in description
+      else if (desc.includes(t))  score += 10; // inside a word in description
+      if (dom.includes(t))       score += word.test(dom) ? 50 : 20;
+      if (tag.includes(t))       score += word.test(tag) ? 45 : 15;
     }
     if (allMatch) out.push({ site, score });
   }
   
   return out.sort((a,b) => {
+    if (a.score !== b.score) return b.score - a.score; // relevance first
     const ptsA = a.site.pts || 0;
     const ptsB = b.site.pts || 0;
-    if (ptsA !== ptsB) return ptsB - ptsA;
-    return b.score - a.score;
+    return ptsB - ptsA;                                // then index points
   }).map(r => r.site);
 }
 
